@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search,
@@ -29,6 +29,15 @@ import {
   KeyRound,
   User,
   Phone,
+  Wallet,
+  MessageSquare,
+  Image as ImageIcon,
+  Archive,
+  FileText,
+  Link as LinkIcon,
+  ExternalLink,
+  Lock,
+  LockOpen,
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
@@ -43,6 +52,14 @@ type LookupKind =
   | "phone"
   | "domain"
   | "hash"
+  | "crypto_eth"
+  | "crypto_btc"
+  | "crypto_sol"
+  | "discord_id"
+  | "discord_invite"
+  | "url"
+  | "image_url"
+  | "headers"
   | "unknown";
 
 interface NormalizedBreach {
@@ -68,6 +85,11 @@ interface SourceResult {
   durationMs: number;
 }
 
+interface PivotGroup {
+  group: string;
+  links: Array<{ label: string; url: string }>;
+}
+
 interface LookupResponse {
   kind: LookupKind;
   query: string;
@@ -84,8 +106,15 @@ interface LookupResponse {
     reverseGeocode: Record<string, unknown> | null;
     email: Record<string, unknown> | null;
     domain: Record<string, unknown> | null;
+    crypto: Record<string, unknown> | null;
+    discordUser: Record<string, unknown> | null;
+    discordInvite: Record<string, unknown> | null;
+    url: Record<string, unknown> | null;
+    wayback: Record<string, unknown> | null;
+    headers: Record<string, unknown> | null;
   };
   breaches: NormalizedBreach[];
+  pivots: PivotGroup[];
   sources: SourceResult[];
 }
 
@@ -125,6 +154,14 @@ const KIND_LABEL: Record<LookupKind, string> = {
   phone: "Phone Intelligence",
   domain: "Domain Intelligence",
   hash: "Hash Intelligence",
+  crypto_eth: "Ethereum Wallet",
+  crypto_btc: "Bitcoin Wallet",
+  crypto_sol: "Solana Wallet",
+  discord_id: "Discord User",
+  discord_invite: "Discord Invite",
+  url: "URL Intelligence",
+  image_url: "Image Analysis",
+  headers: "Header Analysis",
   unknown: "Unknown Selector",
 };
 
@@ -241,22 +278,10 @@ function ReportHeader({
       : "bg-white text-black border-white";
 
   const facts = [
-    {
-      label: "Type",
-      value: KIND_LABEL[data.kind],
-    },
-    {
-      label: "Sources Hit",
-      value: `${data.summary.sourcesOk}/${data.summary.sourcesQueried}`,
-    },
-    {
-      label: "Records",
-      value: String(data.summary.breachCount),
-    },
-    {
-      label: "Databases",
-      value: String(data.summary.uniqueDatabases),
-    },
+    { label: "Type", value: KIND_LABEL[data.kind] },
+    { label: "Sources", value: `${data.summary.sourcesOk}/${data.summary.sourcesQueried}` },
+    { label: "Records", value: String(data.summary.breachCount) },
+    { label: "Databases", value: String(data.summary.uniqueDatabases) },
   ];
 
   return (
@@ -269,7 +294,7 @@ function ReportHeader({
             <span>{KIND_LABEL[data.kind]} Report</span>
           </div>
           <h2 className="text-xl md:text-2xl font-bold tracking-tight text-white font-mono break-all print:text-black">
-            {data.query}
+            {data.query.length > 200 ? data.query.slice(0, 200) + "…" : data.query}
           </h2>
           <div className="flex flex-wrap items-center gap-2 mt-3">
             <span
@@ -621,6 +646,284 @@ function ReverseGeocode({ result }: { result: Record<string, unknown> }) {
   );
 }
 
+function CryptoEnrichment({
+  kind,
+  result,
+}: {
+  kind: LookupKind;
+  result: Record<string, unknown>;
+}) {
+  if (kind === "crypto_eth") {
+    const eth = result as {
+      address?: string;
+      ETH?: { balance?: number; price?: { rate?: number } };
+      countTxs?: number;
+      tokens?: Array<{
+        tokenInfo?: { symbol?: string; name?: string; decimals?: string | number };
+        balance?: number;
+      }>;
+    };
+    const balance = eth.ETH?.balance ?? 0;
+    const usd = eth.ETH?.price?.rate ? balance * eth.ETH.price.rate : null;
+    const tokens = eth.tokens ?? [];
+    return (
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card icon={<Wallet className="w-4 h-4" />} title="Ethereum Wallet">
+          <ResultRow label="Address" value={eth.address} />
+          <ResultRow label="ETH Balance" value={balance} />
+          <ResultRow label="USD Value" value={usd !== null ? `$${usd.toFixed(2)}` : "—"} />
+          <ResultRow label="Tx Count" value={eth.countTxs ?? "—"} />
+        </Card>
+        <Card icon={<Database className="w-4 h-4" />} title={`Tokens (${tokens.length})`}>
+          {tokens.length === 0 ? (
+            <p className="text-sm text-white/50 font-mono">No ERC-20 tokens held.</p>
+          ) : (
+            tokens.slice(0, 12).map((t, i) => {
+              const dec = Number(t.tokenInfo?.decimals ?? 18) || 18;
+              const bal = t.balance ? t.balance / Math.pow(10, dec) : 0;
+              return (
+                <ResultRow
+                  key={i}
+                  label={t.tokenInfo?.symbol ?? `#${i}`}
+                  value={`${bal.toFixed(4)} (${t.tokenInfo?.name ?? "?"})`}
+                />
+              );
+            })
+          )}
+        </Card>
+      </div>
+    );
+  }
+  if (kind === "crypto_btc") {
+    const btc = result as {
+      address?: string;
+      chain_stats?: { funded_txo_sum?: number; spent_txo_sum?: number; tx_count?: number };
+      mempool_stats?: { tx_count?: number };
+    };
+    const funded = btc.chain_stats?.funded_txo_sum ?? 0;
+    const spent = btc.chain_stats?.spent_txo_sum ?? 0;
+    const balanceSat = funded - spent;
+    return (
+      <Card icon={<Wallet className="w-4 h-4" />} title="Bitcoin Wallet">
+        <ResultRow label="Address" value={btc.address} />
+        <ResultRow label="Balance (BTC)" value={(balanceSat / 1e8).toFixed(8)} />
+        <ResultRow label="Total Received (BTC)" value={(funded / 1e8).toFixed(8)} />
+        <ResultRow label="Total Sent (BTC)" value={(spent / 1e8).toFixed(8)} />
+        <ResultRow label="Confirmed Tx Count" value={btc.chain_stats?.tx_count ?? 0} />
+        <ResultRow label="Pending Tx Count" value={btc.mempool_stats?.tx_count ?? 0} />
+      </Card>
+    );
+  }
+  if (kind === "crypto_sol") {
+    const sol = result as { result?: { value?: { lamports?: number; owner?: string; executable?: boolean } } };
+    const lamports = sol.result?.value?.lamports ?? 0;
+    return (
+      <Card icon={<Wallet className="w-4 h-4" />} title="Solana Account">
+        <ResultRow label="Balance (SOL)" value={(lamports / 1e9).toFixed(9)} />
+        <ResultRow label="Owner Program" value={sol.result?.value?.owner} />
+        <ResultRow label="Executable" value={sol.result?.value?.executable} />
+      </Card>
+    );
+  }
+  return null;
+}
+
+function DiscordUserCard({ result }: { result: Record<string, unknown> }) {
+  const u = result as {
+    id?: string;
+    username?: string;
+    global_name?: string;
+    discriminator?: string;
+    avatar?: { id?: string; link?: string };
+    banner?: { link?: string };
+    badges?: string[];
+    created_at?: string;
+  };
+  return (
+    <Card icon={<MessageSquare className="w-4 h-4" />} title="Discord User">
+      <div className="flex items-start gap-4">
+        {u.avatar?.link ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={u.avatar.link}
+            alt="avatar"
+            className="w-16 h-16 rounded-2xl border border-white/10"
+          />
+        ) : null}
+        <div className="flex-1 min-w-0">
+          <ResultRow label="ID" value={u.id} />
+          <ResultRow label="Username" value={u.username} />
+          <ResultRow label="Display Name" value={u.global_name} />
+          <ResultRow label="Created" value={u.created_at} />
+          <ResultRow label="Badges" value={(u.badges ?? []).join(", ") || "—"} />
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function DiscordInviteCard({ result }: { result: Record<string, unknown> }) {
+  const i = result as {
+    code?: string;
+    expires_at?: string | null;
+    approximate_member_count?: number;
+    approximate_presence_count?: number;
+    guild?: { id?: string; name?: string; description?: string; icon?: string };
+    inviter?: { username?: string; id?: string };
+  };
+  return (
+    <Card icon={<MessageSquare className="w-4 h-4" />} title="Discord Invite">
+      <ResultRow label="Code" value={i.code} />
+      <ResultRow label="Server" value={i.guild?.name} />
+      <ResultRow label="Server ID" value={i.guild?.id} />
+      <ResultRow label="Description" value={i.guild?.description} />
+      <ResultRow label="Members" value={i.approximate_member_count} />
+      <ResultRow label="Online" value={i.approximate_presence_count} />
+      <ResultRow label="Inviter" value={i.inviter?.username} />
+      <ResultRow label="Expires" value={i.expires_at ?? "Never"} />
+    </Card>
+  );
+}
+
+function UrlCard({ result, isImage }: { result: Record<string, unknown>; isImage: boolean }) {
+  const u = result as {
+    url?: string;
+    finalUrl?: string;
+    status?: number;
+    contentType?: string;
+    contentLength?: string;
+    server?: string;
+    lastModified?: string;
+    etag?: string;
+  };
+  return (
+    <Card
+      icon={isImage ? <ImageIcon className="w-4 h-4" /> : <LinkIcon className="w-4 h-4" />}
+      title={isImage ? "Image Metadata" : "URL Metadata"}
+    >
+      {isImage && u.url ? (
+        <div className="mb-4 rounded-xl overflow-hidden border border-white/10 bg-black/40 max-h-[320px] flex items-center justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={u.url} alt="preview" className="max-w-full max-h-[320px] object-contain" />
+        </div>
+      ) : null}
+      <ResultRow label="URL" value={u.url} />
+      {u.finalUrl && u.finalUrl !== u.url ? (
+        <ResultRow label="Final URL" value={u.finalUrl} />
+      ) : null}
+      <ResultRow label="Status" value={u.status} />
+      <ResultRow label="Content-Type" value={u.contentType} />
+      <ResultRow label="Content-Length" value={u.contentLength} />
+      <ResultRow label="Server" value={u.server} />
+      <ResultRow label="Last-Modified" value={u.lastModified} />
+      <ResultRow label="ETag" value={u.etag} />
+    </Card>
+  );
+}
+
+function WaybackCard({ result }: { result: Record<string, unknown> }) {
+  const w = result as {
+    archived_snapshots?: { closest?: { url?: string; timestamp?: string; available?: boolean } };
+  };
+  const snap = w.archived_snapshots?.closest;
+  if (!snap?.available) {
+    return (
+      <Card icon={<Archive className="w-4 h-4" />} title="Internet Archive">
+        <p className="text-sm text-white/50 font-mono">No archived snapshot found.</p>
+      </Card>
+    );
+  }
+  return (
+    <Card icon={<Archive className="w-4 h-4" />} title="Internet Archive">
+      <ResultRow label="Snapshot" value={snap.timestamp} />
+      <ResultRow label="URL" value={snap.url} />
+      {snap.url ? (
+        <a
+          href={snap.url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-black text-[10px] font-bold tracking-[0.2em] uppercase hover:bg-white/90 print:hidden"
+        >
+          <ExternalLink className="w-3.5 h-3.5" /> Open Snapshot
+        </a>
+      ) : null}
+    </Card>
+  );
+}
+
+function HeadersCard({ result }: { result: Record<string, unknown> }) {
+  const h = result as {
+    statusLine?: string;
+    server?: string;
+    contentType?: string;
+    poweredBy?: string;
+    setCookieCount?: number;
+    securityHeaders?: { present?: string[]; missing?: string[] };
+    headers?: Record<string, string>;
+  };
+  const present = h.securityHeaders?.present ?? [];
+  const missing = h.securityHeaders?.missing ?? [];
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <Card icon={<FileText className="w-4 h-4" />} title="Header Summary">
+        <ResultRow label="Status Line" value={h.statusLine} />
+        <ResultRow label="Server" value={h.server} />
+        <ResultRow label="Content-Type" value={h.contentType} />
+        <ResultRow label="X-Powered-By" value={h.poweredBy} />
+        <ResultRow label="Set-Cookie Count" value={h.setCookieCount} />
+      </Card>
+      <Card icon={<Shield className="w-4 h-4" />} title="Security Headers">
+        <div className="flex flex-col gap-2">
+          {present.map((p) => (
+            <div key={p} className="flex items-center gap-2 text-xs font-mono text-white/80">
+              <Lock className="w-3 h-3" /> {p}
+            </div>
+          ))}
+          {missing.map((m) => (
+            <div key={m} className="flex items-center gap-2 text-xs font-mono text-white/40">
+              <LockOpen className="w-3 h-3" /> {m}
+            </div>
+          ))}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ---------- Pivot links / dorks section ----------
+
+function PivotsCard({ groups }: { groups: PivotGroup[] }) {
+  if (!groups || groups.length === 0) return null;
+  return (
+    <Card icon={<Search className="w-4 h-4" />} title="Pivot Links & Dorks">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {groups.map((g) => (
+          <div key={g.group}>
+            <div className="text-[10px] font-mono uppercase tracking-[0.25em] text-white/40 mb-3">
+              {g.group}
+            </div>
+            <ul className="space-y-1.5">
+              {g.links.map((l) => (
+                <li key={l.label}>
+                  <a
+                    href={l.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group inline-flex items-center gap-2 text-xs text-white/80 hover:text-white font-mono break-all"
+                  >
+                    <ExternalLink className="w-3 h-3 shrink-0 text-white/40 group-hover:text-white" />
+                    {l.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 // ---------- Sources panel ----------
 
 function SourcesPanel({ sources }: { sources: SourceResult[] }) {
@@ -662,7 +965,64 @@ function SourcesPanel({ sources }: { sources: SourceResult[] }) {
   );
 }
 
+// ---------- Auto-resizing textarea ----------
+
+function AutoTextarea({
+  value,
+  onChange,
+  onSubmit,
+  disabled,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 240) + "px";
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      autoFocus
+      rows={1}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          if (!disabled) onSubmit();
+        }
+      }}
+      placeholder={placeholder}
+      className="flex-1 bg-transparent outline-none text-white placeholder:text-white/30 font-mono text-sm md:text-base resize-none leading-snug py-1"
+    />
+  );
+}
+
 // ---------- Page ----------
+
+const HINTS: Array<{ icon: ReactNode; label: string }> = [
+  { icon: <Mail className="w-3 h-3" />, label: "email" },
+  { icon: <User className="w-3 h-3" />, label: "username" },
+  { icon: <Network className="w-3 h-3" />, label: "ip" },
+  { icon: <Phone className="w-3 h-3" />, label: "phone" },
+  { icon: <KeyRound className="w-3 h-3" />, label: "hash" },
+  { icon: <Globe className="w-3 h-3" />, label: "domain" },
+  { icon: <LinkIcon className="w-3 h-3" />, label: "url" },
+  { icon: <Wallet className="w-3 h-3" />, label: "wallet" },
+  { icon: <MessageSquare className="w-3 h-3" />, label: "discord" },
+  { icon: <ImageIcon className="w-3 h-3" />, label: "image" },
+  { icon: <FileText className="w-3 h-3" />, label: "headers" },
+  { icon: <Archive className="w-3 h-3" />, label: "archive" },
+  { icon: <MapPin className="w-3 h-3" />, label: "coordinates" },
+];
 
 export default function HomePage() {
   const [query, setQuery] = useState("");
@@ -671,8 +1031,7 @@ export default function HomePage() {
   const [data, setData] = useState<LookupResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const submit = async () => {
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
@@ -697,6 +1056,11 @@ export default function HomePage() {
     }
   };
 
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    submit();
+  };
+
   const onCopy = async () => {
     if (!data) return;
     try {
@@ -710,7 +1074,7 @@ export default function HomePage() {
 
   const onDownload = () => {
     if (!data) return;
-    downloadJson(data, `impacta-${data.kind}-${data.query}.json`);
+    downloadJson(data, `impacta-${data.kind}-${data.query.slice(0, 32)}.json`);
   };
 
   const onPrint = () => window.print();
@@ -727,14 +1091,16 @@ export default function HomePage() {
         >
           <div className="inline-flex items-center gap-2 px-3 py-1 mb-4 rounded-full bg-white/5 border border-white/10 text-[10px] font-mono tracking-[0.2em] text-white/60 uppercase">
             <span className="w-1 h-1 rounded-full bg-white/80" />
-            Multi-source intelligence
+            One field. Every source.
           </div>
           <h1 className="text-3xl md:text-5xl font-black tracking-tighter mb-3 text-transparent bg-clip-text bg-gradient-to-b from-white to-white/50">
             Generate a full intelligence report.
           </h1>
           <p className="text-white/50 text-sm md:text-base max-w-2xl">
-            Email, username, IP, phone, hash, domain, or coordinates. One field —
-            queried in parallel across every connected breach and enrichment provider.
+            Paste anything — email, username, IP, phone, hash, domain, URL,
+            crypto wallet, Discord ID/invite, image link, raw HTTP headers, or
+            coordinates. The platform auto-detects the selector and fans out to
+            every relevant breach, blockchain, and pivot source in parallel.
           </p>
         </motion.div>
 
@@ -743,22 +1109,22 @@ export default function HomePage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.1 }}
           onSubmit={onSubmit}
-          className="relative mb-10 print:hidden"
+          className="relative mb-8 print:hidden"
         >
           <div className="absolute inset-0 -m-px rounded-2xl bg-gradient-to-r from-white/20 via-white/5 to-white/20 opacity-50 blur-sm" />
-          <div className="relative flex items-center gap-3 px-5 py-4 rounded-2xl bg-black border border-white/10 focus-within:border-white/30 transition-colors">
-            <Search className="w-5 h-5 text-white/40 shrink-0" />
-            <input
-              autoFocus
+          <div className="relative flex items-start gap-3 px-5 py-4 rounded-2xl bg-black border border-white/10 focus-within:border-white/30 transition-colors">
+            <Search className="w-5 h-5 text-white/40 shrink-0 mt-1" />
+            <AutoTextarea
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="someone@example.com  ·  jdoe  ·  8.8.8.8  ·  +14155551212  ·  example.com"
-              className="flex-1 bg-transparent outline-none text-white placeholder:text-white/30 font-mono text-sm md:text-base"
+              onChange={setQuery}
+              onSubmit={submit}
+              disabled={loading || !query.trim()}
+              placeholder="someone@example.com  ·  jdoe  ·  8.8.8.8  ·  0xabc…  ·  https://example.com/photo.jpg  ·  paste raw headers…"
             />
             <button
               type="submit"
               disabled={loading || !query.trim()}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-black text-xs font-bold tracking-widest uppercase disabled:opacity-40 hover:bg-white/90 transition-all"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white text-black text-xs font-bold tracking-widest uppercase disabled:opacity-40 hover:bg-white/90 transition-all shrink-0"
             >
               {loading ? (
                 <>
@@ -774,13 +1140,11 @@ export default function HomePage() {
             </button>
           </div>
           <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/30 font-mono tracking-wider">
-            <span className="inline-flex items-center gap-1.5"><Mail className="w-3 h-3" /> email</span>
-            <span className="inline-flex items-center gap-1.5"><User className="w-3 h-3" /> username</span>
-            <span className="inline-flex items-center gap-1.5"><Network className="w-3 h-3" /> ip</span>
-            <span className="inline-flex items-center gap-1.5"><Phone className="w-3 h-3" /> phone</span>
-            <span className="inline-flex items-center gap-1.5"><KeyRound className="w-3 h-3" /> hash</span>
-            <span className="inline-flex items-center gap-1.5"><Globe className="w-3 h-3" /> domain</span>
-            <span className="inline-flex items-center gap-1.5"><MapPin className="w-3 h-3" /> coordinates</span>
+            {HINTS.map((h) => (
+              <span key={h.label} className="inline-flex items-center gap-1.5">
+                {h.icon} {h.label}
+              </span>
+            ))}
           </p>
         </motion.form>
 
@@ -796,7 +1160,7 @@ export default function HomePage() {
               <div className="flex items-center gap-3 text-white/60">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 <span className="text-[11px] font-mono uppercase tracking-[0.25em]">
-                  Querying every connected provider in parallel…
+                  Detecting selector & querying every connected provider…
                 </span>
               </div>
               <div className="mt-6 space-y-3">
@@ -845,7 +1209,12 @@ export default function HomePage() {
                 copied={copied}
               />
 
-              <BreachTable breaches={data.breaches} />
+              {(data.kind === "email" ||
+                data.kind === "username" ||
+                data.kind === "phone" ||
+                data.kind === "domain" ||
+                data.kind === "hash" ||
+                data.kind === "ip") && <BreachTable breaches={data.breaches} />}
 
               {data.enrichment.ipGeo ? (
                 <IpEnrichment
@@ -869,12 +1238,48 @@ export default function HomePage() {
                   }
                 />
               ) : null}
+              {data.enrichment.crypto ? (
+                <CryptoEnrichment
+                  kind={data.kind}
+                  result={data.enrichment.crypto as Record<string, unknown>}
+                />
+              ) : null}
+              {data.enrichment.discordUser ? (
+                <DiscordUserCard
+                  result={data.enrichment.discordUser as Record<string, unknown>}
+                />
+              ) : null}
+              {data.enrichment.discordInvite ? (
+                <DiscordInviteCard
+                  result={
+                    data.enrichment.discordInvite as Record<string, unknown>
+                  }
+                />
+              ) : null}
+              {data.enrichment.url ? (
+                <UrlCard
+                  result={data.enrichment.url as Record<string, unknown>}
+                  isImage={data.kind === "image_url"}
+                />
+              ) : null}
+              {data.enrichment.wayback ? (
+                <WaybackCard
+                  result={data.enrichment.wayback as Record<string, unknown>}
+                />
+              ) : null}
+              {data.enrichment.headers ? (
+                <HeadersCard
+                  result={data.enrichment.headers as Record<string, unknown>}
+                />
+              ) : null}
+
+              <PivotsCard groups={data.pivots} />
 
               <SourcesPanel sources={data.sources} />
 
               <p className="text-[10px] text-white/30 font-mono tracking-wider px-1 print:text-black/50">
-                Generated by IMPACTA OSINT — aggregated from third-party providers.
-                For lawful investigative use only.
+                Generated by IMPACTA OSINT — aggregated from third-party providers
+                and public infrastructure data. For lawful investigative use only.
               </p>
             </motion.div>
           )}
