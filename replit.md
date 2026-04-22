@@ -16,6 +16,10 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
 
+## Artifacts
+
+- `impacta-osint` — IMPACTA OSINT marketing/landing site (React + Vite, dark black/white theme). Single-page presentation, no backend.
+
 ## Key Commands
 
 - `pnpm run typecheck` — full typecheck across all packages
