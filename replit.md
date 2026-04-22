@@ -18,7 +18,12 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 ## Artifacts
 
-- `impacta-osint` — IMPACTA OSINT marketing/landing site (React + Vite, dark black/white theme). Single-page presentation, no backend.
+- `impacta-osint` — IMPACTA OSINT single-page lookup tool (React + Vite, dark black/white theme). Search bar + multi-source intelligence report with breach table, enrichment cards, JSON download, and printable PDF report.
+- `api-server` — Express API. `POST /api/lookup` aggregates results in parallel from Snusbase, LeakCheck, SEON, IntelVault, OSINTCat, BreachHub, Luperly, Swatted.wtf, plus free IP-API / DNS / reverse-geocode enrichment. Provider failures are captured per-source and never crash the response.
+
+## Required Secrets (OSINT providers)
+
+`SNUSBASE_API_KEY`, `SNUSBASE_BETA_API_KEY`, `LEAKCHECK_API_KEY`, `SEON_API_KEY`, `INTELVAULT_API_KEY`, `OSINTCAT_API_KEY`, `SWATTED_OG_KEY`, `SWATTED_PLUS_KEY`, `SWATTED_ULTIMATE_KEY`, `SWATTED_HEIST_KEY`, `SWATTED_SECURITY_PHRASE`, `BREACHHUB_API_KEY`, `LUPERLY_API_KEY`. Missing keys simply mark that provider as failed in the report.
 
 ## Key Commands
 

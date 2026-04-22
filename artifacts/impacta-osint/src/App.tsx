@@ -3,38 +3,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import NotFound from "@/pages/not-found";
-import ExplorePage from "@/pages/explore";
-import { Navbar } from "@/components/Navbar";
-import { Hero } from "@/components/Hero";
-import { Services } from "@/components/Services";
-import { Stats } from "@/components/Stats";
-import { Features } from "@/components/Features";
-import { Pricing } from "@/components/Pricing";
-import { Footer } from "@/components/Footer";
+import HomePage from "@/pages/home";
 
 const queryClient = new QueryClient();
-
-function Home() {
-  return (
-    <div className="relative min-h-screen w-full bg-black text-white overflow-hidden selection:bg-white selection:text-black">
-      <Navbar />
-      <main className="relative z-10 flex flex-col items-center w-full">
-        <Hero />
-        <Services />
-        <Stats />
-        <Features />
-        <Pricing />
-      </main>
-      <Footer />
-    </div>
-  );
-}
 
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
-      <Route path="/explore" component={ExplorePage} />
+      <Route path="/" component={HomePage} />
       <Route component={NotFound} />
     </Switch>
   );
