@@ -741,7 +741,8 @@ function normalizeBreaches(results: SourceResult[]): NormalizedBreach[] {
 
 router.post("/lookup", async (req, res) => {
   const raw = typeof req.body?.query === "string" ? req.body.query : "";
-  const value = raw.trim();
+  // Allow users to terminate input with a trailing comma (UX hint shown on the page).
+  const value = raw.trim().replace(/,+\s*$/, "").trim();
   if (!value) {
     res.status(400).json({ error: "Query required." });
     return;

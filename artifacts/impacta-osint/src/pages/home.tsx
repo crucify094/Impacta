@@ -1008,6 +1008,48 @@ function AutoTextarea({
 
 // ---------- Page ----------
 
+const MODULES: Array<{ icon: ReactNode; name: string; example: string }> = [
+  { icon: <Mail className="w-3.5 h-3.5" />, name: "Email Intelligence", example: "someone@example.com" },
+  { icon: <User className="w-3.5 h-3.5" />, name: "Username Intelligence", example: "jdoe / @jdoe" },
+  { icon: <Network className="w-3.5 h-3.5" />, name: "IP Intelligence", example: "8.8.8.8 (v4 or v6)" },
+  { icon: <Phone className="w-3.5 h-3.5" />, name: "Phone Intelligence", example: "+14155551212" },
+  { icon: <KeyRound className="w-3.5 h-3.5" />, name: "Hash Intelligence", example: "MD5 / SHA-1 / SHA-256" },
+  { icon: <Globe className="w-3.5 h-3.5" />, name: "Domain Intelligence", example: "example.com" },
+  { icon: <LinkIcon className="w-3.5 h-3.5" />, name: "URL Intelligence", example: "https://example.com/path" },
+  { icon: <ImageIcon className="w-3.5 h-3.5" />, name: "Image Analysis", example: "https://…/photo.jpg" },
+  { icon: <FileText className="w-3.5 h-3.5" />, name: "Header Analysis", example: "Paste raw HTTP headers" },
+  { icon: <Wallet className="w-3.5 h-3.5" />, name: "Ethereum Wallet", example: "0x… (40 hex chars)" },
+  { icon: <Wallet className="w-3.5 h-3.5" />, name: "Bitcoin Wallet", example: "1… / 3… / bc1…" },
+  { icon: <Wallet className="w-3.5 h-3.5" />, name: "Solana Wallet", example: "Base58 32–44 chars" },
+  { icon: <MessageSquare className="w-3.5 h-3.5" />, name: "Discord User", example: "17–20 digit ID" },
+  { icon: <MessageSquare className="w-3.5 h-3.5" />, name: "Discord Invite", example: "discord.gg/code" },
+  { icon: <Archive className="w-3.5 h-3.5" />, name: "Internet Archive", example: "Auto on URLs/domains" },
+  { icon: <MapPin className="w-3.5 h-3.5" />, name: "Geolocation", example: "37.7749, -122.4194" },
+  { icon: <Search className="w-3.5 h-3.5" />, name: "Pivot Links & Dorks", example: "Always included" },
+];
+
+const APIS: Array<{ name: string; purpose: string; auth: "key" | "free" }> = [
+  { name: "Snusbase", purpose: "Breach search (email, username, IP, hash, phone, domain)", auth: "key" },
+  { name: "LeakCheck", purpose: "Breach search (email, username, IP, phone, hash, domain)", auth: "key" },
+  { name: "SEON", purpose: "Email / IP / phone fraud + enrichment", auth: "key" },
+  { name: "IntelVault", purpose: "Cross-source breach aggregation", auth: "key" },
+  { name: "OSINTCat", purpose: "OSINT directory search", auth: "key" },
+  { name: "Swatted.wtf", purpose: "Tiered breach data (Heist → Ultimate → Plus → OG)", auth: "key" },
+  { name: "BreachHub", purpose: "Breach record search", auth: "key" },
+  { name: "Luperly", purpose: "OSINT search", auth: "key" },
+  { name: "IP-API", purpose: "Free IP geolocation, ASN, proxy/VPN/hosting flags", auth: "free" },
+  { name: "BigDataCloud Reverse Geocode", purpose: "Free coordinates → locality lookup", auth: "free" },
+  { name: "Node DNS Resolver", purpose: "MX / A / AAAA / NS / TXT records", auth: "free" },
+  { name: "Ethplorer", purpose: "Ethereum address balance + ERC-20 tokens", auth: "free" },
+  { name: "Blockstream Esplora", purpose: "Bitcoin address balance + tx counts", auth: "free" },
+  { name: "Solana JSON-RPC", purpose: "Solana account info + balance", auth: "free" },
+  { name: "Discord Lookup (mesalytic)", purpose: "Public Discord user info by snowflake ID", auth: "free" },
+  { name: "Discord API", purpose: "Invite resolver (server, members, inviter)", auth: "free" },
+  { name: "Internet Archive Wayback", purpose: "Closest archived snapshot of a URL", auth: "free" },
+  { name: "URL HEAD probe", purpose: "Status, content-type, server, ETag, last-modified", auth: "free" },
+  { name: "Google / Yandex / TinEye / Bing", purpose: "Pivot links for dorks & reverse image search", auth: "free" },
+];
+
 const HINTS: Array<{ icon: ReactNode; label: string }> = [
   { icon: <Mail className="w-3 h-3" />, label: "email" },
   { icon: <User className="w-3 h-3" />, label: "username" },
@@ -1024,12 +1066,15 @@ const HINTS: Array<{ icon: ReactNode; label: string }> = [
   { icon: <MapPin className="w-3 h-3" />, label: "coordinates" },
 ];
 
+type Panel = "modules" | "apis" | null;
+
 export default function HomePage() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<LookupResponse | null>(null);
   const [copied, setCopied] = useState(false);
+  const [panel, setPanel] = useState<Panel>(null);
 
   const submit = async () => {
     if (!query.trim()) return;
@@ -1146,7 +1191,161 @@ export default function HomePage() {
               </span>
             ))}
           </p>
+          <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-[11px] text-white/60 font-mono leading-relaxed">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0 text-white/50" />
+            <div>
+              <span className="text-white/80">Tip:</span> end your input with a
+              comma <span className="text-white">(,)</span> so the parser knows
+              exactly where your value stops — useful when pasting things like{" "}
+              <span className="text-white/80">jdoe,</span> or{" "}
+              <span className="text-white/80">8.8.8.8,</span> from another
+              document. The trailing comma is stripped automatically.
+            </div>
+          </div>
         </motion.form>
+
+        <div className="flex flex-wrap items-center gap-2 mb-6 print:hidden">
+          <button
+            type="button"
+            onClick={() => setPanel(panel === "modules" ? null : "modules")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full border text-[10px] font-bold uppercase tracking-[0.2em] transition-colors ${
+              panel === "modules"
+                ? "bg-white text-black border-white"
+                : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
+            }`}
+          >
+            <Database className="w-3.5 h-3.5" />
+            Modules ({MODULES.length})
+            {panel === "modules" ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setPanel(panel === "apis" ? null : "apis")}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-full border text-[10px] font-bold uppercase tracking-[0.2em] transition-colors ${
+              panel === "apis"
+                ? "bg-white text-black border-white"
+                : "bg-white/5 text-white/70 border-white/10 hover:bg-white/10"
+            }`}
+          >
+            <Server className="w-3.5 h-3.5" />
+            APIs ({APIS.length})
+            {panel === "apis" ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : (
+              <ChevronRight className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+
+        <AnimatePresence>
+          {panel === "modules" && (
+            <motion.div
+              key="modules"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-8 overflow-hidden print:hidden"
+            >
+              <div className="rounded-2xl border border-white/10 bg-white/[0.02]">
+                <div className="px-6 py-4 border-b border-white/10 flex items-center gap-2">
+                  <Database className="w-4 h-4" />
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.25em]">
+                    Available Modules
+                  </h3>
+                  <span className="ml-auto text-[10px] font-mono text-white/40 uppercase tracking-[0.2em]">
+                    Auto-detected from your input
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px bg-white/5">
+                  {MODULES.map((m) => (
+                    <div
+                      key={m.name}
+                      className="flex items-start gap-3 px-5 py-4 bg-black/40"
+                    >
+                      <div className="w-8 h-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center shrink-0 text-white/80">
+                        {m.icon}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-bold text-white tracking-wide">
+                          {m.name}
+                        </div>
+                        <div className="text-[11px] text-white/50 font-mono mt-0.5 break-all">
+                          {m.example}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {panel === "apis" && (
+            <motion.div
+              key="apis"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mb-8 overflow-hidden print:hidden"
+            >
+              <div className="rounded-2xl border border-white/10 bg-white/[0.02]">
+                <div className="px-6 py-4 border-b border-white/10 flex items-center gap-2">
+                  <Server className="w-4 h-4" />
+                  <h3 className="text-[11px] font-bold uppercase tracking-[0.25em]">
+                    Connected APIs
+                  </h3>
+                  <span className="ml-auto text-[10px] font-mono text-white/40 uppercase tracking-[0.2em]">
+                    Names only · keys never exposed
+                  </span>
+                </div>
+                <div className="divide-y divide-white/5">
+                  {APIS.map((a) => (
+                    <div
+                      key={a.name}
+                      className="flex items-start gap-3 px-5 py-3"
+                    >
+                      <div className="shrink-0 mt-0.5">
+                        {a.auth === "key" ? (
+                          <Lock className="w-3.5 h-3.5 text-white" />
+                        ) : (
+                          <LockOpen className="w-3.5 h-3.5 text-white/50" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[12px] font-bold text-white">
+                            {a.name}
+                          </span>
+                          <span
+                            className={`text-[9px] font-mono uppercase tracking-[0.2em] px-1.5 py-0.5 rounded ${
+                              a.auth === "key"
+                                ? "bg-white text-black"
+                                : "bg-white/10 text-white/60 border border-white/10"
+                            }`}
+                          >
+                            {a.auth === "key" ? "API Key" : "No Key"}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-white/50 font-mono mt-0.5 leading-relaxed">
+                          {a.purpose}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="px-5 py-3 border-t border-white/10 text-[10px] font-mono text-white/40 leading-relaxed">
+                  Provider keys are read from server-side environment secrets and
+                  are never sent to the browser, logged, or echoed in any
+                  response.
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence mode="wait">
           {loading && (
