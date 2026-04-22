@@ -33,10 +33,16 @@ export function Footer() {
               Quiet, surgical, professional.
             </p>
             <div className="flex items-center gap-3">
-              {[FaDiscord, FaXTwitter, FaGithub].map((Icon, i) => (
+              {[
+                { Icon: FaDiscord, href: "https://discord.gg/qBBwY2qhc" },
+                { Icon: FaXTwitter, href: "#" },
+                { Icon: FaGithub, href: "#" },
+              ].map(({ Icon, href }, i) => (
                 <a
                   key={i}
-                  href="#"
+                  href={href}
+                  target={href.startsWith("http") ? "_blank" : undefined}
+                  rel={href.startsWith("http") ? "noreferrer" : undefined}
                   className="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 hover:border-white/20 transition-all"
                 >
                   <Icon className="w-4 h-4 text-white/70" />

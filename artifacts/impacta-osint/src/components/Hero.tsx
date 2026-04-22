@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { ArrowRight, Code2 } from "lucide-react";
 import { FaDiscord } from "react-icons/fa";
 import { useEffect, useState } from "react";
+import { Link } from "wouter";
 
 function BinaryBackground() {
   const [matrix, setMatrix] = useState("");
@@ -73,18 +74,18 @@ export function Hero() {
           transition={{ duration: 0.8, delay: 0.7 }}
           className="flex flex-col sm:flex-row items-center gap-4 w-full sm:w-auto"
         >
-          <a
-            href="#tools"
+          <Link
+            href="/explore"
             className="group relative flex items-center justify-center gap-3 w-full sm:w-auto px-8 py-4 bg-white text-black font-bold tracking-widest uppercase text-sm rounded-full overflow-hidden transition-all hover:scale-105 hover:shadow-[0_0_40px_rgba(255,255,255,0.4)]"
           >
             <span className="relative z-10 flex items-center gap-2">
               Explore Tools
               <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
             </span>
-          </a>
+          </Link>
 
           <a
-            href="https://discord.gg"
+            href="https://discord.gg/qBBwY2qhc"
             target="_blank"
             rel="noreferrer"
             className="group flex items-center justify-center gap-3 w-full sm:w-auto px-8 py-4 bg-white/5 border border-white/10 text-white font-bold tracking-widest uppercase text-sm rounded-full transition-all hover:bg-white/10 hover:border-white/20"
