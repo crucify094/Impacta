@@ -1,7 +1,19 @@
 import { Router, type IRouter } from "express";
 import { promises as dns } from "node:dns";
+import OpenAI from "openai";
 
 const router: IRouter = Router();
+
+// ---------- OpenAI client (Replit AI Integrations proxy) ----------
+
+const openai =
+  process.env["AI_INTEGRATIONS_OPENAI_BASE_URL"] &&
+  process.env["AI_INTEGRATIONS_OPENAI_API_KEY"]
+    ? new OpenAI({
+        baseURL: process.env["AI_INTEGRATIONS_OPENAI_BASE_URL"],
+        apiKey: process.env["AI_INTEGRATIONS_OPENAI_API_KEY"],
+      })
+    : null;
 
 type LookupKind =
   | "ip"
@@ -634,6 +646,166 @@ function pivots(value: string, kind: LookupKind): PivotGroup[] {
   return out;
 }
 
+// ---------- OpenAI: classify ambiguous inputs ----------
+
+async function aiClassify(value: string): Promise<{ kind: LookupKind; confidence: number; reasoning: string } | null> {
+  if (!openai) return null;
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-5-nano",
+      max_completion_tokens: 200,
+      messages: [
+        {
+          role: "system",
+          content:
+            "You classify OSINT lookup inputs. Reply with strict JSON only: {\"kind\":\"...\",\"confidence\":0-1,\"reasoning\":\"short\"}. Allowed kinds: email, username, ip, phone, hash, domain, crypto_eth, crypto_btc, crypto_sol, discord_id, discord_invite, url, image_url, headers, coordinates, unknown.",
+        },
+        { role: "user", content: `Input: ${value.slice(0, 500)}` },
+      ],
+      response_format: { type: "json_object" },
+    });
+    const text = res.choices[0]?.message?.content ?? "";
+    const parsed = JSON.parse(text) as { kind?: string; confidence?: number; reasoning?: string };
+    const allowed: LookupKind[] = [
+      "email", "username", "ip", "phone", "hash", "domain",
+      "crypto_eth", "crypto_btc", "crypto_sol", "discord_id", "discord_invite",
+      "url", "image_url", "headers", "coordinates", "unknown",
+    ];
+    if (parsed.kind && (allowed as string[]).includes(parsed.kind)) {
+      return {
+        kind: parsed.kind as LookupKind,
+        confidence: Number(parsed.confidence ?? 0),
+        reasoning: String(parsed.reasoning ?? ""),
+      };
+    }
+  } catch {
+    // graceful fall-through
+  }
+  return null;
+}
+
+// ---------- OpenAI: report intelligence analyst ----------
+
+interface AiAnalysis {
+  riskScore: number; // 0–100
+  riskLabel: "low" | "moderate" | "elevated" | "high" | "critical";
+  summary: string;
+  identityCorrelation: string[];
+  patterns: string[];
+  recommendations: string[];
+  pivotSuggestions: string[];
+  notes: string;
+  model: string;
+}
+
+function compactSourcesForAi(results: SourceResult[]): unknown {
+  return results.map((r) => {
+    if (!r.ok) return { source: r.source, ok: false, error: r.error };
+    // Truncate huge payloads so we don't blow the context window
+    const json = JSON.stringify(r.data);
+    return {
+      source: r.source,
+      ok: true,
+      preview: json.length > 6000 ? json.slice(0, 6000) + "…<truncated>" : json,
+    };
+  });
+}
+
+async function aiAnalyse(args: {
+  kind: LookupKind;
+  query: string;
+  breaches: NormalizedBreach[];
+  sources: SourceResult[];
+  enrichment: Record<string, unknown>;
+}): Promise<AiAnalysis | null> {
+  if (!openai) return null;
+  try {
+    const topBreaches = args.breaches.slice(0, 60).map((b) => ({
+      source: b.source,
+      database: b.database,
+      email: b.email ? b.email : undefined,
+      username: b.username,
+      hasPassword: Boolean(b.password),
+      ip: b.ip,
+      name: b.name,
+      phone: b.phone,
+      date: b.date,
+    }));
+    const sources = compactSourcesForAi(args.sources);
+
+    const sys = `You are an elite OSINT analyst. Analyze the assembled report and produce a strict JSON object with this shape:
+{
+  "riskScore": number 0-100,
+  "riskLabel": "low"|"moderate"|"elevated"|"high"|"critical",
+  "summary": "2-4 sentence executive summary",
+  "identityCorrelation": ["short bullet"],
+  "patterns": ["short bullet"],
+  "recommendations": ["short bullet"],
+  "pivotSuggestions": ["short bullet"],
+  "notes": "short caveats / data quality notes"
+}
+Rules:
+- Base every claim on supplied data; never invent provider names or breach databases.
+- Identity correlation: link aliases, emails, IPs, names that co-occur across breaches.
+- Patterns: re-used passwords / hashes / IPs / handles, dark-web mentions, dates, geographic concentration.
+- Recommendations: concrete defensive or investigative next actions.
+- Pivot suggestions: specific selectors the user should next look up (with the actual values found).
+- Bullets must be <= 140 chars and high-signal. No markdown, no headers in strings.
+- If data is sparse, say so plainly in "notes" and lower the score accordingly.`;
+
+    const user = `Selector type: ${args.kind}
+Query: ${args.query}
+Total breach records: ${args.breaches.length}
+Unique databases: ${new Set(args.breaches.map((b) => b.database).filter(Boolean)).size}
+
+Top breach records (truncated):
+${JSON.stringify(topBreaches, null, 2)}
+
+Enrichment blocks present: ${Object.keys(args.enrichment).filter((k) => (args.enrichment as Record<string, unknown>)[k]).join(", ") || "none"}
+Enrichment payload (truncated):
+${JSON.stringify(args.enrichment).slice(0, 4000)}
+
+Provider responses summary:
+${JSON.stringify(sources).slice(0, 4000)}`;
+
+    const res = await openai.chat.completions.create({
+      model: "gpt-5.4",
+      max_completion_tokens: 1800,
+      messages: [
+        { role: "system", content: sys },
+        { role: "user", content: user },
+      ],
+      response_format: { type: "json_object" },
+    });
+    const text = res.choices[0]?.message?.content ?? "";
+    const parsed = JSON.parse(text) as Partial<AiAnalysis>;
+    const labels = ["low", "moderate", "elevated", "high", "critical"] as const;
+    return {
+      riskScore: Math.max(0, Math.min(100, Number(parsed.riskScore ?? 0))),
+      riskLabel: labels.includes(parsed.riskLabel as typeof labels[number])
+        ? (parsed.riskLabel as AiAnalysis["riskLabel"])
+        : "low",
+      summary: String(parsed.summary ?? "").slice(0, 1200),
+      identityCorrelation: Array.isArray(parsed.identityCorrelation)
+        ? parsed.identityCorrelation.map((s) => String(s)).slice(0, 12)
+        : [],
+      patterns: Array.isArray(parsed.patterns)
+        ? parsed.patterns.map((s) => String(s)).slice(0, 12)
+        : [],
+      recommendations: Array.isArray(parsed.recommendations)
+        ? parsed.recommendations.map((s) => String(s)).slice(0, 12)
+        : [],
+      pivotSuggestions: Array.isArray(parsed.pivotSuggestions)
+        ? parsed.pivotSuggestions.map((s) => String(s)).slice(0, 12)
+        : [],
+      notes: String(parsed.notes ?? "").slice(0, 600),
+      model: "gpt-5.4",
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------- Normalisation: pull breach rows out of each provider ----------
 
 interface NormalizedBreach {
@@ -748,7 +920,14 @@ router.post("/lookup", async (req, res) => {
     return;
   }
 
-  const kind = detectKind(value);
+  let kind = detectKind(value);
+  let aiClassification: { kind: LookupKind; confidence: number; reasoning: string } | null = null;
+  if (kind === "unknown") {
+    aiClassification = await aiClassify(value);
+    if (aiClassification && aiClassification.kind !== "unknown") {
+      kind = aiClassification.kind;
+    }
+  }
   const tasks: Array<[string, () => Promise<{ status?: number; data: unknown }>]> = [];
 
   // Strip leading @ for lookups when treated as username
@@ -861,9 +1040,33 @@ router.post("/lookup", async (req, res) => {
   }
   const pivotLinks = pivots(usernameValue, pivotKind);
 
+  const enrichment = {
+    ipGeo: find("ip-geo"),
+    reverseGeocode: find("reverse-geocode"),
+    email: find("email-dns"),
+    domain: find("domain-dns"),
+    crypto:
+      find("ethplorer") ?? find("blockstream") ?? find("solana-rpc"),
+    discordUser: find("discord-user"),
+    discordInvite: find("discord-invite"),
+    url: find("url-meta"),
+    wayback: find("wayback"),
+    headers: find("header-analysis"),
+  };
+
+  // AI analysis pass — runs after all providers; degrades gracefully on failure
+  const aiAnalysis = await aiAnalyse({
+    kind,
+    query: value,
+    breaches,
+    sources: results,
+    enrichment,
+  });
+
   res.json({
     kind,
     query: value,
+    aiClassification,
     summary: {
       sourcesQueried: results.length,
       sourcesOk,
@@ -873,20 +1076,10 @@ router.post("/lookup", async (req, res) => {
         new Set(breaches.map((b) => b.database).filter(Boolean) as string[]),
       ).length,
       generatedAt: new Date().toISOString(),
+      aiEnabled: Boolean(openai),
     },
-    enrichment: {
-      ipGeo: find("ip-geo"),
-      reverseGeocode: find("reverse-geocode"),
-      email: find("email-dns"),
-      domain: find("domain-dns"),
-      crypto:
-        find("ethplorer") ?? find("blockstream") ?? find("solana-rpc"),
-      discordUser: find("discord-user"),
-      discordInvite: find("discord-invite"),
-      url: find("url-meta"),
-      wayback: find("wayback"),
-      headers: find("header-analysis"),
-    },
+    enrichment,
+    aiAnalysis,
     breaches,
     pivots: pivotLinks,
     sources: results,
