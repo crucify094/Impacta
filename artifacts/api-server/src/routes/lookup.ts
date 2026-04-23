@@ -275,13 +275,40 @@ async function osintcat(query: string, kind: LookupKind) {
   });
 }
 
-// Swatted — DISCONTINUED. swatted.wtf doesn't resolve, swatted.shop is a
-// GoDaddy storefront with no API. Kept as a stub so the source row appears
-// in the report explaining the situation rather than silently disappearing.
-async function swatted(_query: string, _kind: LookupKind) {
-  throw new Error(
-    "Swatted has no public REST API (swatted.wtf doesn't resolve, swatted.shop is unrelated)",
-  );
+// Swatted — verified live at swattedw.tf/api/lookup.
+// Their API uses session-token auth ("Authentication required. Provide a
+// valid session token."). We try the configured key as a Bearer token and
+// also as a session cookie. If the user's key isn't a session token the
+// upstream will respond with a clear error which is surfaced verbatim.
+async function swatted(query: string, kind: LookupKind) {
+  const keys = [
+    process.env["SWATTED_HEIST_KEY"],
+    process.env["SWATTED_ULTIMATE_KEY"],
+    process.env["SWATTED_PLUS_KEY"],
+    process.env["SWATTED_OG_KEY"],
+  ].filter(Boolean) as string[];
+  if (keys.length === 0) throw new Error("No Swatted keys configured");
+  const phrase = process.env["SWATTED_SECURITY_PHRASE"] ?? "";
+  let lastErr: unknown;
+  for (const key of keys) {
+    try {
+      return await fetchJson("https://swattedw.tf/api/lookup", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+          Cookie: `session=${key}`,
+          ...(phrase ? { "X-Security-Phrase": phrase } : {}),
+        },
+        body: JSON.stringify({ query, type: kind }),
+      });
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("Swatted: all configured keys failed");
 }
 
 // BreachHub — verified live at breachhub.org/api/v1/search?key=...
@@ -428,8 +455,227 @@ async function solAddress(addr: string) {
 
 // ---------- Discord ----------
 
+// Discord public user flag bitfield → human badges
+// (per https://discord.com/developers/docs/resources/user#user-object-user-flags)
+const DISCORD_BADGES: Array<[number, string]> = [
+  [1 << 0, "Discord Employee"],
+  [1 << 1, "Partnered Server Owner"],
+  [1 << 2, "HypeSquad Events"],
+  [1 << 3, "Bug Hunter Level 1"],
+  [1 << 6, "HypeSquad Bravery"],
+  [1 << 7, "HypeSquad Brilliance"],
+  [1 << 8, "HypeSquad Balance"],
+  [1 << 9, "Early Supporter"],
+  [1 << 10, "Team User"],
+  [1 << 14, "Bug Hunter Level 2"],
+  [1 << 16, "Verified Bot"],
+  [1 << 17, "Early Verified Bot Developer"],
+  [1 << 18, "Discord Certified Moderator"],
+  [1 << 22, "Active Developer"],
+];
+
+function decodeBadges(flags: number | undefined | null): string[] {
+  if (typeof flags !== "number" || flags <= 0) return [];
+  return DISCORD_BADGES.filter(([bit]) => (flags & bit) !== 0).map(
+    ([, name]) => name,
+  );
+}
+
+function buildAvatarUrl(
+  userId: string,
+  hash: string | undefined | null,
+  discriminator: string | undefined | null,
+  size = 512,
+): string | null {
+  if (hash) {
+    const ext = hash.startsWith("a_") ? "gif" : "png";
+    return `https://cdn.discordapp.com/avatars/${userId}/${hash}.${ext}?size=${size}`;
+  }
+  // Default avatar — Discord uses (id >> 22) % 6 for non-pomelo users
+  // and discriminator % 5 for legacy.
+  if (discriminator && discriminator !== "0") {
+    const idx = Number(discriminator) % 5;
+    return `https://cdn.discordapp.com/embed/avatars/${idx}.png`;
+  }
+  try {
+    const idx = Number((BigInt(userId) >> 22n) % 6n);
+    return `https://cdn.discordapp.com/embed/avatars/${idx}.png`;
+  } catch {
+    return null;
+  }
+}
+
+function buildBannerUrl(
+  userId: string,
+  hash: string | undefined | null,
+  size = 1024,
+): string | null {
+  if (!hash) return null;
+  const ext = hash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/banners/${userId}/${hash}.${ext}?size=${size}`;
+}
+
+interface DiscordProfile {
+  id: string;
+  username: string | null;
+  globalName: string | null;
+  displayName: string | null;
+  discriminator: string | null;
+  legacyTag: string | null;
+  bot: boolean;
+  system: boolean | null;
+  badges: string[];
+  rawFlags: number | null;
+  publicFlags: number | null;
+  premiumType: number | null;
+  nitroLabel: string | null;
+  accentColor: string | null;
+  bannerColor: string | null;
+  avatarUrl: string | null;
+  avatarHash: string | null;
+  bannerUrl: string | null;
+  bannerHash: string | null;
+  bio: string | null;
+  pronouns: string | null;
+  pastNames: Array<{ value: string; source: string }>;
+  createdAt: string | null;
+  sources: string[];
+}
+
+function snowflakeToDate(id: string): string | null {
+  try {
+    const DISCORD_EPOCH = 1420070400000n;
+    const ms = (BigInt(id) >> 22n) + DISCORD_EPOCH;
+    return new Date(Number(ms)).toISOString();
+  } catch {
+    return null;
+  }
+}
+
+const NITRO_LABEL: Record<number, string> = {
+  0: "None",
+  1: "Nitro Classic",
+  2: "Nitro",
+  3: "Nitro Basic",
+};
+
+// Mesalytic public proxy — the de-facto unauthenticated Discord lookup.
+async function fetchMesalytic(id: string): Promise<Record<string, unknown> | null> {
+  try {
+    const r = await fetchJson(
+      `https://discordlookup.mesalytic.moe/v1/user/${encodeURIComponent(id)}`,
+    );
+    if (
+      r.data &&
+      typeof r.data === "object" &&
+      !(r.data as Record<string, unknown>)["error"]
+    ) {
+      return r.data as Record<string, unknown>;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// Build a unified Discord profile from every source we can reach.
+async function discordProfile(id: string): Promise<DiscordProfile> {
+  const profile: DiscordProfile = {
+    id,
+    username: null,
+    globalName: null,
+    displayName: null,
+    discriminator: null,
+    legacyTag: null,
+    bot: false,
+    system: null,
+    badges: [],
+    rawFlags: null,
+    publicFlags: null,
+    premiumType: null,
+    nitroLabel: null,
+    accentColor: null,
+    bannerColor: null,
+    avatarUrl: null,
+    avatarHash: null,
+    bannerUrl: null,
+    bannerHash: null,
+    bio: null,
+    pronouns: null,
+    pastNames: [],
+    createdAt: snowflakeToDate(id),
+    sources: [],
+  };
+
+  // ---- Mesalytic ----
+  const mesa = await fetchMesalytic(id);
+  if (mesa) {
+    profile.sources.push("mesalytic");
+    const u = (mesa["user"] as Record<string, unknown>) ?? mesa;
+    profile.username = (u["username"] as string) ?? profile.username;
+    profile.globalName = (u["global_name"] as string) ?? profile.globalName;
+    profile.discriminator =
+      (u["discriminator"] as string) ?? profile.discriminator;
+    profile.bot = Boolean((u["bot"] as boolean) ?? profile.bot);
+    profile.publicFlags =
+      (u["public_flags"] as number) ?? profile.publicFlags;
+    profile.rawFlags = (u["flags"] as number) ?? profile.rawFlags;
+    profile.accentColor =
+      (u["accent_color"] !== null && u["accent_color"] !== undefined
+        ? `#${Number(u["accent_color"]).toString(16).padStart(6, "0")}`
+        : null) ?? profile.accentColor;
+    const av = (u["avatar"] as { id?: string; link?: string }) ?? null;
+    if (av && typeof av === "object") {
+      profile.avatarHash = (av.id as string) ?? null;
+      profile.avatarUrl = (av.link as string) ?? null;
+    } else if (typeof u["avatar"] === "string") {
+      profile.avatarHash = u["avatar"] as string;
+    }
+    const bn = (u["banner"] as { id?: string; link?: string; color?: string }) ?? null;
+    if (bn && typeof bn === "object") {
+      profile.bannerHash = (bn.id as string) ?? null;
+      profile.bannerUrl = (bn.link as string) ?? null;
+      profile.bannerColor = (bn.color as string) ?? null;
+    }
+    const badges = u["badges"];
+    if (Array.isArray(badges)) {
+      profile.badges = badges.map((b) =>
+        typeof b === "string" ? b : (b as { id?: string; name?: string })?.name ?? String(b),
+      );
+    }
+    const premium = u["premium_type"];
+    if (typeof premium === "number") {
+      profile.premiumType = premium;
+      profile.nitroLabel = NITRO_LABEL[premium] ?? null;
+    }
+  }
+
+  // ---- Fallbacks / fill-in ----
+  if (profile.badges.length === 0 && profile.publicFlags) {
+    profile.badges = decodeBadges(profile.publicFlags);
+  }
+  if (!profile.avatarUrl) {
+    profile.avatarUrl = buildAvatarUrl(id, profile.avatarHash, profile.discriminator);
+  }
+  if (!profile.bannerUrl) {
+    profile.bannerUrl = buildBannerUrl(id, profile.bannerHash);
+  }
+  profile.displayName =
+    profile.globalName ?? profile.username ?? null;
+  profile.legacyTag =
+    profile.username && profile.discriminator && profile.discriminator !== "0"
+      ? `${profile.username}#${profile.discriminator}`
+      : profile.username
+      ? `@${profile.username}`
+      : null;
+
+  return profile;
+}
+
 async function discordUser(id: string) {
-  return fetchJson(`https://discordlookup.mesalytic.moe/v1/user/${encodeURIComponent(id)}`);
+  // Kept for OpenAPI/legacy compatibility — wraps the new aggregator.
+  const profile = await discordProfile(id);
+  return { status: 200 as number | undefined, data: profile };
 }
 
 async function discordInvite(inviteOrUrl: string) {
@@ -964,20 +1210,7 @@ router.post("/lookup", async (req, res) => {
     tasks.push(["leakcheck", () => leakcheck(value, kind)]);
     tasks.push(["intelvault", () => intelvault(value, kind)]);
     tasks.push(["osintcat", () => osintcat(value, kind)]);
-  } else if (kind === "coordinates") {
-    const [latStr, lonStr] = value.split(/[, ]+/);
-    const lat = Number(latStr);
-    const lon = Number(lonStr);
-    if (
-      Number.isNaN(lat) ||
-      Number.isNaN(lon) ||
-      Math.abs(lat) > 90 ||
-      Math.abs(lon) > 180
-    ) {
-      res.status(400).json({ error: "Coordinates out of range." });
-      return;
-    }
-    tasks.push(["reverse-geocode", () => reverseGeocode(lat, lon)]);
+    tasks.push(["swatted", () => swatted(value, kind)]);
   } else if (kind === "email") {
     tasks.push(["email-dns", () => emailDns(value)]);
     tasks.push(["snusbase", () => snusbase(value, kind)]);
@@ -986,47 +1219,17 @@ router.post("/lookup", async (req, res) => {
     tasks.push(["intelvault", () => intelvault(value, kind)]);
     tasks.push(["osintcat", () => osintcat(value, kind)]);
     tasks.push(["breachhub", () => breachhub(value, kind)]);
-  } else if (kind === "domain") {
-    tasks.push(["domain-dns", () => domainDns(value)]);
-    tasks.push(["snusbase", () => snusbase(value, kind)]);
-    tasks.push(["leakcheck", () => leakcheck(value, kind)]);
-    tasks.push(["osintcat", () => osintcat(value, kind)]);
-    tasks.push(["wayback", () => wayback(`http://${value}`)]);
-  } else if (kind === "phone") {
-    tasks.push(["seon", () => seon(value, kind)]);
-    tasks.push(["snusbase", () => snusbase(value, kind)]);
-    tasks.push(["leakcheck", () => leakcheck(value, kind)]);
-    tasks.push(["osintcat", () => osintcat(value, kind)]);
-    tasks.push(["breachhub", () => breachhub(value, kind)]);
-  } else if (kind === "username" || kind === "hash") {
-    tasks.push(["snusbase", () => snusbase(usernameValue, kind)]);
-    tasks.push(["leakcheck", () => leakcheck(usernameValue, kind)]);
-    tasks.push(["osintcat", () => osintcat(usernameValue, kind)]);
-    tasks.push(["breachhub", () => breachhub(usernameValue, kind)]);
-    if (kind === "username") {
-      tasks.push(["intelvault", () => intelvault(usernameValue, kind)]);
-    }
-  } else if (kind === "crypto_eth") {
-    tasks.push(["ethplorer", () => ethAddress(value)]);
-  } else if (kind === "crypto_btc") {
-    tasks.push(["blockstream", () => btcAddress(value)]);
-  } else if (kind === "crypto_sol") {
-    tasks.push(["solana-rpc", () => solAddress(value)]);
+    tasks.push(["swatted", () => swatted(value, kind)]);
   } else if (kind === "discord_id") {
     tasks.push(["discord-user", () => discordUser(value)]);
-  } else if (kind === "discord_invite") {
-    tasks.push(["discord-invite", () => discordInvite(value)]);
-  } else if (kind === "url") {
-    tasks.push(["url-meta", () => urlMeta(value)]);
-    tasks.push(["wayback", () => wayback(value)]);
-  } else if (kind === "image_url") {
-    tasks.push(["url-meta", () => urlMeta(value)]);
-  } else if (kind === "headers") {
-    tasks.push(["header-analysis", async () => parseHeaders(value)]);
+    tasks.push(["intelvault", () => intelvault(value, kind)]);
+    tasks.push(["snusbase", () => snusbase(value, "username")]);
+    tasks.push(["osintcat", () => osintcat(value, "username")]);
+    tasks.push(["swatted", () => swatted(value, "discord_id")]);
   } else {
     res.status(400).json({
       error:
-        "Unrecognized input. Try email, username, IP, phone, hash, domain, URL, image URL, raw HTTP headers, or a wallet (ETH/BTC/SOL).",
+        "This build supports three lookups: email, IP address, and Discord ID. Paste one of those.",
     });
     return;
   }

@@ -18,8 +18,18 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 ## Artifacts
 
-- `impacta-osint` — IMPACTA OSINT single-page lookup tool (React + Vite, dark black/white theme). Search bar + multi-source intelligence report with breach table, enrichment cards, JSON download, and printable PDF report.
-- `api-server` — Express API. `POST /api/lookup` aggregates results in parallel from Snusbase, LeakCheck, SEON, IntelVault, OSINTCat, BreachHub, Luperly, Swatted.wtf, plus free IP-API / DNS / reverse-geocode enrichment. Provider failures are captured per-source and never crash the response.
+- `impacta-osint` — IMPACTA OSINT single-page lookup tool (React + Vite, dark black/white theme). One search bar, three lookups: **Discord ID**, **Email**, **IP address**. Auto-detects, fans out to every connected provider, renders a rich Discord profile card (banner, avatar, badges, tag, bio, past names if any source returns them), breach table, AI risk analysis card, JSON download, and printable PDF report.
+- `api-server` — Express API. `POST /api/lookup` accepts `{query, kind?}` and aggregates results in parallel. Per-kind providers:
+  - **discord_id** → mesalytic public proxy (full profile: badges, avatar, banner, accent, Nitro), Discord CDN avatar/banner URL builder, snowflake → created-at, IntelVault discord-to-ip, Snusbase + OSINTCat (treating ID as username), Swatted.
+  - **email** → DNS, Snusbase, LeakCheck, SEON, IntelVault, OSINTCat, BreachHub, Swatted.
+  - **ip** → IP-API geo, Snusbase, LeakCheck, SEON, IntelVault, OSINTCat, Swatted.
+  Other input kinds return 400. Provider failures are captured per-source and never crash the response. AI layer (gpt-5.4 via Replit AI Integrations OpenAI proxy) consumes raw provider data and emits risk score, identity correlation, patterns, recommendations, and pivot suggestions.
+
+### Notes on provider behavior
+- **Discord profile sources**: mesalytic.moe is reachable from production hosts (Railway etc.) but the Replit dev sandbox's egress IP is blocked, so dev-mode Discord lookups will show only fields derivable from the snowflake (created_at, default avatar). On Railway the full profile resolves.
+- **Swatted (swattedw.tf/api/lookup)**: requires a session token, not the static keys we have. Returns 401/404 with the current keys; failures are surfaced per-source. If the user later provides a real `session=...` cookie we can plumb it in.
+- **BreachHub**: current key returns 401 (invalid).
+- **OSINTCat**: known upstream bug returns 500 for some payload types ("'coroutine' object has no attribute 'get'").
 
 ## Required Secrets (OSINT providers)
 
