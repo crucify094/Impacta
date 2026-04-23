@@ -38,6 +38,10 @@ import {
   ExternalLink,
   Lock,
   LockOpen,
+  Sparkles,
+  Brain,
+  Lightbulb,
+  Target,
 } from "lucide-react";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
@@ -90,9 +94,23 @@ interface PivotGroup {
   links: Array<{ label: string; url: string }>;
 }
 
+interface AiAnalysis {
+  riskScore: number;
+  riskLabel: "low" | "moderate" | "elevated" | "high" | "critical";
+  summary: string;
+  identityCorrelation: string[];
+  patterns: string[];
+  recommendations: string[];
+  pivotSuggestions: string[];
+  notes: string;
+  model: string;
+}
+
 interface LookupResponse {
   kind: LookupKind;
   query: string;
+  aiClassification?: { kind: LookupKind; confidence: number; reasoning: string } | null;
+  aiAnalysis?: AiAnalysis | null;
   summary: {
     sourcesQueried: number;
     sourcesOk: number;
@@ -100,6 +118,7 @@ interface LookupResponse {
     breachCount: number;
     uniqueDatabases: number;
     generatedAt: string;
+    aiEnabled?: boolean;
   };
   enrichment: {
     ipGeo: Record<string, unknown> | null;
@@ -188,7 +207,7 @@ function Card({
   right,
 }: {
   icon?: ReactNode;
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   className?: string;
   right?: ReactNode;
@@ -250,6 +269,93 @@ function KeyFact({ label, value }: { label: string; value: string }) {
 }
 
 // ---------- Report header ----------
+
+function AiAnalysisCard({ ai }: { ai: AiAnalysis }) {
+  const tone =
+    ai.riskLabel === "critical"
+      ? { ring: "ring-red-500/40", bar: "bg-red-500", text: "text-red-300", chip: "bg-red-500/15 text-red-300 border-red-500/30" }
+      : ai.riskLabel === "high"
+      ? { ring: "ring-orange-500/40", bar: "bg-orange-500", text: "text-orange-300", chip: "bg-orange-500/15 text-orange-300 border-orange-500/30" }
+      : ai.riskLabel === "elevated"
+      ? { ring: "ring-amber-500/40", bar: "bg-amber-500", text: "text-amber-300", chip: "bg-amber-500/15 text-amber-300 border-amber-500/30" }
+      : ai.riskLabel === "moderate"
+      ? { ring: "ring-yellow-500/40", bar: "bg-yellow-500", text: "text-yellow-300", chip: "bg-yellow-500/15 text-yellow-300 border-yellow-500/30" }
+      : { ring: "ring-emerald-500/40", bar: "bg-emerald-500", text: "text-emerald-300", chip: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" };
+
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-violet-300" />
+          AI Intelligence Analysis
+          <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">
+            {ai.model}
+          </span>
+        </span>
+      }
+    >
+      <div className={`rounded-lg border border-white/10 bg-zinc-950/40 p-4 ring-1 ${tone.ring}`}>
+        <div className="flex items-center gap-4">
+          <div className="flex flex-col items-center justify-center min-w-[5.5rem]">
+            <div className={`text-3xl font-bold ${tone.text}`}>{ai.riskScore}</div>
+            <div className="text-[10px] uppercase tracking-widest text-zinc-500">/ 100</div>
+          </div>
+          <div className="flex-1 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className={`px-2 py-0.5 rounded border text-[11px] font-medium uppercase tracking-wider ${tone.chip}`}>
+                {ai.riskLabel} risk
+              </span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+              <div className={`h-full ${tone.bar}`} style={{ width: `${ai.riskScore}%` }} />
+            </div>
+            <p className="text-sm text-zinc-200 leading-relaxed">{ai.summary}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-3 mt-4">
+        {ai.identityCorrelation.length > 0 && (
+          <AiList icon={<Network className="h-3.5 w-3.5" />} title="Identity Correlation" items={ai.identityCorrelation} />
+        )}
+        {ai.patterns.length > 0 && (
+          <AiList icon={<Brain className="h-3.5 w-3.5" />} title="Patterns Detected" items={ai.patterns} />
+        )}
+        {ai.recommendations.length > 0 && (
+          <AiList icon={<ShieldAlert className="h-3.5 w-3.5" />} title="Recommendations" items={ai.recommendations} />
+        )}
+        {ai.pivotSuggestions.length > 0 && (
+          <AiList icon={<Target className="h-3.5 w-3.5" />} title="Suggested Pivots" items={ai.pivotSuggestions} />
+        )}
+      </div>
+
+      {ai.notes && (
+        <div className="mt-3 flex items-start gap-2 text-[11px] text-zinc-400 italic border-t border-white/5 pt-3">
+          <Lightbulb className="h-3.5 w-3.5 mt-0.5 text-amber-400/70 shrink-0" />
+          <span>{ai.notes}</span>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function AiList({ icon, title, items }: { icon: React.ReactNode; title: string; items: string[] }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-zinc-950/30 p-3">
+      <div className="flex items-center gap-1.5 mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+        {icon}
+        {title}
+      </div>
+      <ul className="space-y-1.5">
+        {items.map((it, i) => (
+          <li key={i} className="text-xs text-zinc-300 leading-snug pl-3 relative before:content-['›'] before:absolute before:left-0 before:text-violet-400/60">
+            {it}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 function ReportHeader({
   data,
@@ -1407,6 +1513,8 @@ export default function HomePage() {
                 onPrint={onPrint}
                 copied={copied}
               />
+
+              {data.aiAnalysis ? <AiAnalysisCard ai={data.aiAnalysis} /> : null}
 
               {(data.kind === "email" ||
                 data.kind === "username" ||

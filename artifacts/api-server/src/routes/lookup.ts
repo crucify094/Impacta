@@ -223,61 +223,85 @@ async function seon(query: string, kind: LookupKind) {
   return fetchJson(url, { headers: { "X-API-KEY": key } });
 }
 
-async function intelvault(query: string) {
+// IntelVault — verified live at api.intelvault.net
+// Endpoints discovered from their JS bundle:
+//   /api/v1/tools/osint/email           (POST { email })
+//   /api/v1/tools/osint/ip-lookup       (POST { ip })
+//   /api/v1/tools/osint/discord-to-ip   (POST { discord_id })
+//   /api/v1/tools/osint/cfx-resolver
+//   /api/v1/tools/osint/roblox-usernames
+async function intelvault(query: string, kind: LookupKind) {
   const key = process.env["INTELVAULT_API_KEY"];
   if (!key) throw new Error("INTELVAULT_API_KEY not configured");
-  return fetchJson(
-    `https://api.intelvault.io/v1/search?query=${encodeURIComponent(query)}`,
-    { headers: { Authorization: `Bearer ${key}` } },
-  );
+  let path: string;
+  let body: Record<string, string>;
+  if (kind === "email") {
+    path = "/api/v1/tools/osint/email";
+    body = { email: query };
+  } else if (kind === "ip") {
+    path = "/api/v1/tools/osint/ip-lookup";
+    body = { ip: query };
+  } else if (kind === "discord_id") {
+    path = "/api/v1/tools/osint/discord-to-ip";
+    body = { discord_id: query };
+  } else if (kind === "username") {
+    // Roblox is the only username lookup their bundle exposes
+    path = "/api/v1/tools/osint/roblox-usernames";
+    body = { username: query };
+  } else {
+    throw new Error(`IntelVault does not support ${kind}`);
+  }
+  return fetchJson(`https://api.intelvault.net${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-Key": key,
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify(body),
+  });
 }
 
-async function osintcat(query: string) {
+// OSINTCat — verified live at osintcat.net/api/breach (auth header is `api-key`)
+// NOTE: their server has a known bug returning HTTP 500 for some types
+// ("'coroutine' object has no attribute 'get'") — surfaced as upstream error.
+async function osintcat(query: string, kind: LookupKind) {
   const key = process.env["OSINTCAT_API_KEY"];
   if (!key) throw new Error("OSINTCAT_API_KEY not configured");
-  return fetchJson(
-    `https://api.osint.cat/v2/search?query=${encodeURIComponent(query)}`,
-    { headers: { Authorization: `Bearer ${key}` } },
+  return fetchJson("https://osintcat.net/api/breach", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "api-key": key },
+    body: JSON.stringify({ query, type: kind }),
+  });
+}
+
+// Swatted — DISCONTINUED. swatted.wtf doesn't resolve, swatted.shop is a
+// GoDaddy storefront with no API. Kept as a stub so the source row appears
+// in the report explaining the situation rather than silently disappearing.
+async function swatted(_query: string, _kind: LookupKind) {
+  throw new Error(
+    "Swatted has no public REST API (swatted.wtf doesn't resolve, swatted.shop is unrelated)",
   );
 }
 
-async function swatted(query: string, kind: LookupKind) {
-  const tiers = [
-    ["heist", process.env["SWATTED_HEIST_KEY"]],
-    ["ultimate", process.env["SWATTED_ULTIMATE_KEY"]],
-    ["plus", process.env["SWATTED_PLUS_KEY"]],
-    ["og", process.env["SWATTED_OG_KEY"]],
-  ].filter(([, k]) => Boolean(k)) as Array<[string, string]>;
-  if (tiers.length === 0) throw new Error("Swatted keys not configured");
-  let lastErr: unknown;
-  for (const [, key] of tiers) {
-    try {
-      return await fetchJson(
-        `https://api.swatted.wtf/v1/search?q=${encodeURIComponent(query)}&type=${kind}`,
-        { headers: { Authorization: `Bearer ${key}` } },
-      );
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error("Swatted: all tiers failed");
-}
-
-async function breachhub(query: string) {
+// BreachHub — verified live at breachhub.org/api/v1/search?key=...
+async function breachhub(query: string, kind: LookupKind) {
   const key = process.env["BREACHHUB_API_KEY"];
   if (!key) throw new Error("BREACHHUB_API_KEY not configured");
   return fetchJson(
-    `https://api.breachhub.io/search?q=${encodeURIComponent(query)}`,
-    { headers: { Authorization: `Bearer ${key}` } },
+    `https://breachhub.org/api/v1/search?key=${encodeURIComponent(key)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, type: kind }),
+    },
   );
 }
 
-async function luperly(query: string) {
-  const key = process.env["LUPERLY_API_KEY"];
-  if (!key) throw new Error("LUPERLY_API_KEY not configured");
-  return fetchJson(
-    `https://luperly.vercel.app/api/search?q=${encodeURIComponent(query)}&key=${encodeURIComponent(key)}`,
-  );
+// Luperly — DISCONTINUED. luperly.xyz home page literally reads
+// "discontinued son, @midleg". Kept as stub for a clear status row.
+async function luperly(_query: string) {
+  throw new Error("Luperly is discontinued (per their own homepage)");
 }
 
 // ---------- Free enrichment ----------
@@ -938,9 +962,8 @@ router.post("/lookup", async (req, res) => {
     tasks.push(["seon", () => seon(value, kind)]);
     tasks.push(["snusbase", () => snusbase(value, kind)]);
     tasks.push(["leakcheck", () => leakcheck(value, kind)]);
-    tasks.push(["intelvault", () => intelvault(value)]);
-    tasks.push(["osintcat", () => osintcat(value)]);
-    tasks.push(["luperly", () => luperly(value)]);
+    tasks.push(["intelvault", () => intelvault(value, kind)]);
+    tasks.push(["osintcat", () => osintcat(value, kind)]);
   } else if (kind === "coordinates") {
     const [latStr, lonStr] = value.split(/[, ]+/);
     const lat = Number(latStr);
@@ -960,36 +983,29 @@ router.post("/lookup", async (req, res) => {
     tasks.push(["snusbase", () => snusbase(value, kind)]);
     tasks.push(["leakcheck", () => leakcheck(value, kind)]);
     tasks.push(["seon", () => seon(value, kind)]);
-    tasks.push(["intelvault", () => intelvault(value)]);
-    tasks.push(["osintcat", () => osintcat(value)]);
-    tasks.push(["breachhub", () => breachhub(value)]);
-    tasks.push(["luperly", () => luperly(value)]);
-    tasks.push(["swatted", () => swatted(value, kind)]);
+    tasks.push(["intelvault", () => intelvault(value, kind)]);
+    tasks.push(["osintcat", () => osintcat(value, kind)]);
+    tasks.push(["breachhub", () => breachhub(value, kind)]);
   } else if (kind === "domain") {
     tasks.push(["domain-dns", () => domainDns(value)]);
     tasks.push(["snusbase", () => snusbase(value, kind)]);
     tasks.push(["leakcheck", () => leakcheck(value, kind)]);
-    tasks.push(["intelvault", () => intelvault(value)]);
-    tasks.push(["osintcat", () => osintcat(value)]);
-    tasks.push(["luperly", () => luperly(value)]);
+    tasks.push(["osintcat", () => osintcat(value, kind)]);
     tasks.push(["wayback", () => wayback(`http://${value}`)]);
   } else if (kind === "phone") {
     tasks.push(["seon", () => seon(value, kind)]);
     tasks.push(["snusbase", () => snusbase(value, kind)]);
     tasks.push(["leakcheck", () => leakcheck(value, kind)]);
-    tasks.push(["intelvault", () => intelvault(value)]);
-    tasks.push(["osintcat", () => osintcat(value)]);
-    tasks.push(["breachhub", () => breachhub(value)]);
-    tasks.push(["luperly", () => luperly(value)]);
-    tasks.push(["swatted", () => swatted(value, kind)]);
+    tasks.push(["osintcat", () => osintcat(value, kind)]);
+    tasks.push(["breachhub", () => breachhub(value, kind)]);
   } else if (kind === "username" || kind === "hash") {
     tasks.push(["snusbase", () => snusbase(usernameValue, kind)]);
     tasks.push(["leakcheck", () => leakcheck(usernameValue, kind)]);
-    tasks.push(["intelvault", () => intelvault(usernameValue)]);
-    tasks.push(["osintcat", () => osintcat(usernameValue)]);
-    tasks.push(["breachhub", () => breachhub(usernameValue)]);
-    tasks.push(["luperly", () => luperly(usernameValue)]);
-    tasks.push(["swatted", () => swatted(usernameValue, kind)]);
+    tasks.push(["osintcat", () => osintcat(usernameValue, kind)]);
+    tasks.push(["breachhub", () => breachhub(usernameValue, kind)]);
+    if (kind === "username") {
+      tasks.push(["intelvault", () => intelvault(usernameValue, kind)]);
+    }
   } else if (kind === "crypto_eth") {
     tasks.push(["ethplorer", () => ethAddress(value)]);
   } else if (kind === "crypto_btc") {
